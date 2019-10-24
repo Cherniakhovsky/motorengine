@@ -45,10 +45,16 @@ class BaseDocument(object):
                 self._fields[key] = DynamicField(db_field="_%s" % key.lstrip('_'))
             self._values[key] = value
 
+    # old
     @classmethod
     @run_on_executor
     def ensure_index(cls, callback=None):
         cls.objects.ensure_index(callback=callback)
+
+    # new
+    @classmethod
+    async def ensure_indexes(cls):
+        await cls.objects.ensure_indexes()
 
     @property
     def is_lazy(self):
@@ -110,6 +116,7 @@ class BaseDocument(object):
 
         return True
 
+    # new
     @run_on_executor
     def save(self, callback, alias=None, upsert=False):
         '''
@@ -124,6 +131,7 @@ class BaseDocument(object):
         _id = await self.objects.save(self, alias=alias, upsert=upsert)
         return _id
 
+    # old
     @run_on_executor
     def delete(self, callback, alias=None):
         '''
@@ -160,6 +168,44 @@ class BaseDocument(object):
             io_loop.start()
         '''
         self.objects.remove(instance=self, callback=callback, alias=alias)
+    
+    # new
+    async def delete(self, alias=None):
+        '''
+        Deletes the current instance of this Document.
+
+        .. testsetup:: saving_delete_one
+
+            import tornado.ioloop
+            from motorengine import *
+
+            class User(Document):
+                __collection__ = "UserDeletingInstance"
+                name = StringField()
+
+            io_loop = tornado.ioloop.IOLoop.instance()
+            connect("test", host="localhost", port=27017, io_loop=io_loop)
+
+        .. testcode:: saving_delete_one
+
+            def handle_user_created(user):
+                user.delete(callback=handle_user_deleted)
+
+            def handle_user_deleted(number_of_deleted_items):
+                try:
+                    assert number_of_deleted_items == 1
+                finally:
+                    io_loop.stop()
+
+            def create_user():
+                user = User(name="Bernardo")
+                user.save(callback=handle_user_created)
+
+            io_loop.add_timeout(1, create_user)
+            io_loop.start()
+        '''
+        deleted_count = await self.objects.remove(instance=self, alias=alias)
+        return deleted_count
 
     def fill_values_collection(self, collection, field_name, value):
         collection[field_name] = value
@@ -187,6 +233,7 @@ class BaseDocument(object):
 
         return handle
 
+    # old
     @run_on_executor
     def load_references(self, fields=None, callback=None, alias=None):
         if callback is None:
@@ -214,6 +261,32 @@ class BaseDocument(object):
                     fill_values_method=fill_values_method
                 )
             )
+
+    # TODO:
+    # new
+    # async def load_references(self, fields=None, alias=None):
+    #     references = self.find_references(document=self, fields=fields)
+    #     reference_count = len(references)
+
+    #     if not reference_count:
+    #         callback({
+    #             'loaded_reference_count': reference_count,
+    #             'loaded_values': []
+    #         })
+    #         return
+
+    #     for dereference_function, document_id, values_collection, field_name, fill_values_method in references:
+    #         dereference_function(
+    #             document_id,
+    #             callback=self.handle_load_reference(
+    #                 callback=callback,
+    #                 references=references,
+    #                 reference_count=reference_count,
+    #                 values_collection=values_collection,
+    #                 field_name=field_name,
+    #                 fill_values_method=fill_values_method
+    #             )
+    #         )
 
     def find_references(self, document, fields=None, results=None):
         if results is None:

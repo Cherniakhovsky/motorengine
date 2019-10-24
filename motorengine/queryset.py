@@ -248,6 +248,7 @@ class QuerySet(object):
         )
         self.coll(alias).update(**update_arguments)
 
+    # old
     @run_on_executor
     def delete(self, callback=None, alias=None):
         '''
@@ -286,25 +287,52 @@ class QuerySet(object):
 
         self.remove(callback=callback, alias=alias)
 
+    # new
+    async def delete(self, alias=None) -> int:
+        deleted_count = await self.remove(alias=alias)
+        return deleted_count
+
+    # depricated
     def handle_remove(self, callback):
         def handle(*args, **kw):
             callback(args[0]['n'])
 
         return handle
 
+    # old
     def remove(self, instance=None, callback=None, alias=None):
         if callback is None:
             raise RuntimeError("The callback argument is required")
 
         if instance is not None:
             if hasattr(instance, '_id') and instance._id:
-                self.coll(alias).remove(instance._id, callback=self.handle_remove(callback))
+                self.coll(alias).remove(instance._id)
         else:
             if self._filters:
                 remove_filters = self.get_query_from_filters(self._filters)
                 self.coll(alias).remove(remove_filters, callback=self.handle_remove(callback))
             else:
                 self.coll(alias).remove(callback=self.handle_remove(callback))
+
+    # new
+    async def remove(self, instance=None, alias=None) -> int:
+        """
+        return deleted_count
+        """
+        deleteResult = None
+        if instance is not None:
+            if hasattr(instance, '_id') and instance._id:
+                deleteResult = await self.coll(alias).delete_one({'_id': instance._id})
+        else:
+            print(f"_filters:{self._filters}")
+            if self._filters:
+                remove_filters = self.get_query_from_filters(self._filters)
+                print(f"remove_filters:{remove_filters}")
+                deleteResult = await self.coll(alias).delete_many(remove_filters)
+            else:
+                print(f"no filters set to remove documents")
+                #self.coll(alias).delete_many()
+        return deleteResult.deleted_count if deleteResult is not None else -1
 
     def _check_valid_field_name_to_project(self, field_name, value):
         """Determine a presence of the field_name in the document.
@@ -619,7 +647,7 @@ class QuerySet(object):
             callback=self.handle_get(callback)
         )
 
-    async def get(self, id=None, alias=None, **kwargs):
+    async def get(self, id=None, alias=None, **kwargs) -> dict:
         '''
         Gets a single item of the current queryset collection using it's id.
 
@@ -642,11 +670,30 @@ class QuerySet(object):
             filters = Q(**kwargs)
             filters = self.get_query_from_filters(filters)
 
-        document = await self.coll(alias).find_one(
+        document_dict = await self.coll(alias).find_one(
             filters, projection=self._loaded_fields.to_query(self.__klass__),
         )
 
-        return document
+        # return Document object for furthur operation such as remove, update
+        # if document_dict is None:
+        #     return None
+
+        # else:
+        #     doc = self.__klass__.from_son(
+        #         instance,
+        #         # if _loaded_fields is not empty then
+        #         # document is partly loaded
+        #         _is_partly_loaded=bool(self._loaded_fields),
+        #         # set projections for references (if any)
+        #         _reference_loaded_fields=self._reference_loaded_fields
+        #     )
+
+        #     if self.is_lazy:
+        #         callback(doc)
+        #     else:
+        #         doc.load_references(callback=self.handle_auto_load_references(doc, callback))
+
+        return document_dict
 
     def get_query_from_filters(self, filters):
         if not filters:
