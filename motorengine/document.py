@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import six
-from tornado.concurrent import return_future
+from tornado.concurrent import run_on_executor
 
 from motorengine.metaclasses import DocumentMetaClass
 from motorengine.errors import InvalidDocumentError, LoadReferencesRequiredError
-
+from bson.objectid import ObjectId
 
 AUTHORIZED_FIELDS = [
     '_id', '_values', '_reference_loaded_fields', 'is_partly_loaded'
@@ -34,19 +34,19 @@ class BaseDocument(object):
         else:
             self._reference_loaded_fields = {}
 
-        for key, field in self._fields.items():
+        for key, field in list(self._fields.items()):
             if callable(field.default):
                 self._values[field.name] = field.default()
             else:
                 self._values[field.name] = field.default
 
-        for key, value in kw.items():
+        for key, value in list(kw.items()):
             if key not in self._fields:
                 self._fields[key] = DynamicField(db_field="_%s" % key.lstrip('_'))
             self._values[key] = value
 
     @classmethod
-    @return_future
+    @run_on_executor
     def ensure_index(cls, callback=None):
         cls.objects.ensure_index(callback=callback)
 
@@ -70,7 +70,7 @@ class BaseDocument(object):
     def from_son(cls, dic, _is_partly_loaded=False, _reference_loaded_fields=None):
         field_values = {}
         _object_id = dic.pop('_id', None)
-        for name, value in dic.items():
+        for name, value in list(dic.items()):
             field = cls.get_field_by_db_name(name)
             if field:
                 field_values[field.name] = field.from_son(value)
@@ -87,7 +87,7 @@ class BaseDocument(object):
     def to_son(self):
         data = dict()
 
-        for name, field in self._fields.items():
+        for name, field in list(self._fields.items()):
             value = self.get_field_value(name)
             if field.sparse and value is None:
                 continue
@@ -99,7 +99,7 @@ class BaseDocument(object):
         return self.validate_fields()
 
     def validate_fields(self):
-        for name, field in self._fields.items():
+        for name, field in list(self._fields.items()):
 
             value = self.get_field_value(name)
 
@@ -110,14 +110,21 @@ class BaseDocument(object):
 
         return True
 
-    @return_future
+    @run_on_executor
     def save(self, callback, alias=None, upsert=False):
         '''
         Creates or updates the current instance of this document.
         '''
         self.objects.save(self, callback=callback, alias=alias, upsert=upsert)
 
-    @return_future
+    async def save(self, alias=None, upsert=False) -> ObjectId:
+        '''
+        Creates or updates the current instance of this document.
+        '''
+        _id = await self.objects.save(self, alias=alias, upsert=upsert)
+        return _id
+
+    @run_on_executor
     def delete(self, callback, alias=None):
         '''
         Deletes the current instance of this Document.
@@ -180,7 +187,7 @@ class BaseDocument(object):
 
         return handle
 
-    @return_future
+    @run_on_executor
     def load_references(self, fields=None, callback=None, alias=None):
         if callback is None:
             raise ValueError("Callback can't be None")
@@ -218,11 +225,11 @@ class BaseDocument(object):
         if fields:
             fields = [
                 (field_name, field)
-                for field_name, field in document._fields.items()
+                for field_name, field in list(document._fields.items())
                 if field_name in fields
             ]
         else:
-            fields = [field for field in document._fields.items()]
+            fields = [field for field in list(document._fields.items())]
 
         for field_name, field in fields:
             self.find_reference_field(document, results, field_name, field)
@@ -331,7 +338,7 @@ class BaseDocument(object):
 
     @classmethod
     def get_field_by_db_name(cls, name):
-        for field_name, field in cls._fields.items():
+        for field_name, field in list(cls._fields.items()):
             if name == field.db_field or name.lstrip("_") == field.db_field:
                 return field
         return None
@@ -354,10 +361,10 @@ class BaseDocument(object):
         obj = cls._fields.get(field_values[0], dyn_field)
         fields.append(obj)
 
-        if isinstance(obj, (EmbeddedDocumentField, )):
+        if isinstance(obj, EmbeddedDocumentField):
             obj.embedded_type.get_fields(".".join(field_values[1:]), fields=fields)
 
-        if isinstance(obj, (ListField, )):
+        if isinstance(obj, ListField):
             obj.item_type.get_fields(".".join(field_values[1:]), fields=fields)
 
         return fields

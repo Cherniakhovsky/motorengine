@@ -6,7 +6,7 @@ import operator
 import itertools
 
 from pymongo.errors import DuplicateKeyError
-from tornado.concurrent import return_future
+from tornado.concurrent import run_on_executor
 from easydict import EasyDict as edict
 from bson.objectid import ObjectId
 
@@ -22,6 +22,8 @@ DEFAULT_LIMIT = 1000
 
 
 class QuerySet(object):
+    created_indexes = {}
+
     def __init__(self, klass):
         self.__klass__ = klass
         self._filters = {}
@@ -45,7 +47,7 @@ class QuerySet(object):
 
         return conn[self.__klass__.__collection__]
 
-    @return_future
+    @run_on_executor
     def create(self, callback, alias=None, **kwargs):
         '''
         Creates and saved a new instance of the document.
@@ -82,7 +84,7 @@ class QuerySet(object):
     def handle_save(self, document, callback):
         def handle(*arguments, **kw):
             if len(arguments) > 1 and arguments[1]:
-                if isinstance(arguments[1], (DuplicateKeyError, )):
+                if isinstance(arguments[1], DuplicateKeyError):
                     raise UniqueKeyViolationError.from_pymongo(str(arguments[1]), self.__klass__)
                 else:
                     raise arguments[1]
@@ -102,11 +104,11 @@ class QuerySet(object):
         return handle
 
     def update_field_on_save_values(self, document, creating):
-        for field_name, field in self.__klass__._fields.items():
+        for field_name, field in list(self.__klass__._fields.items()):
             if field.on_save is not None:
                 setattr(document, field_name, field.on_save(document, creating))
 
-    def save(self, document, callback, alias=None, upsert=False):
+    async def save(self, document, alias=None, upsert=False) -> ObjectId:
         if document.is_partly_loaded:
             msg = (
                 "Partly loaded document {0} can't be saved. Document should "
@@ -118,10 +120,23 @@ class QuerySet(object):
             )
 
         if self.validate_document(document):
-            self.ensure_index(
-                callback=self.indexes_saved_before_save(document, callback, alias=alias, upsert=upsert), 
-                alias=alias
-            )
+
+            await self.ensure_indexes(alias=alias)
+
+            self.update_field_on_save_values(document, document._id is not None)
+            doc = document.to_son()
+
+            if document._id is not None:
+                result = await self.coll(alias).update_one(
+                    {'_id': document._id}, 
+                    doc, 
+                    upsert=upsert,
+                )
+                return document._id if result.modified_count > 0 else None
+            else:
+                result = await self.coll(alias).insert_one(doc)
+                return result.inserted_id
+
 
     def indexes_saved_before_save(self, document, callback, alias=None, upsert=False):
         def handle(*args, **kw):
@@ -160,7 +175,7 @@ class QuerySet(object):
 
         return handle
 
-    @return_future
+    @run_on_executor
     def bulk_insert(self, documents, callback=None, alias=None):
         '''
         Inserts all documents passed to this method in one go.
@@ -206,15 +221,15 @@ class QuerySet(object):
 
         result = {}
 
-        for key, value in definition.items():
-            if isinstance(key, (BaseField, )):
+        for key, value in list(definition.items()):
+            if isinstance(key, BaseField):
                 result[key.db_field] = value
             else:
                 result[key] = value
 
         return result
 
-    @return_future
+    @run_on_executor
     def update(self, definition, callback=None, alias=None):
         if callback is None:
             raise RuntimeError("The callback argument is required")
@@ -233,7 +248,7 @@ class QuerySet(object):
         )
         self.coll(alias).update(**update_arguments)
 
-    @return_future
+    @run_on_executor
     def delete(self, callback=None, alias=None):
         '''
         Removes all instances of this document that match the specified filters (if any).
@@ -403,7 +418,7 @@ class QuerySet(object):
 
         only_fields = {}
         for field_name in fields:
-            if isinstance(field_name, (BaseField, )):
+            if isinstance(field_name, BaseField):
                 field_name = field_name.name
 
             only_fields[field_name] = QueryFieldList.ONLY
@@ -454,7 +469,7 @@ class QuerySet(object):
 
         exclude_fields = {}
         for field_name in fields:
-            if isinstance(field_name, (BaseField, )):
+            if isinstance(field_name, BaseField):
                 field_name = field_name.name
 
             exclude_fields[field_name] = QueryFieldList.EXCLUDE
@@ -500,7 +515,7 @@ class QuerySet(object):
         # Check for an operator and transform to mongo-style if there is one
         operators = ["slice"]
         cleaned_fields = []
-        for key, value in kwargs.items():
+        for key, value in list(kwargs.items()):
             parts = key.split('__')
             if parts[0] in operators:
                 op = parts.pop(0)
@@ -575,7 +590,7 @@ class QuerySet(object):
 
         return handle
 
-    @return_future
+    @run_on_executor
     def get(self, id=None, callback=None, alias=None, **kwargs):
         '''
         Gets a single item of the current queryset collection using it's id.
@@ -603,6 +618,35 @@ class QuerySet(object):
             filters, projection=self._loaded_fields.to_query(self.__klass__),
             callback=self.handle_get(callback)
         )
+
+    async def get(self, id=None, alias=None, **kwargs):
+        '''
+        Gets a single item of the current queryset collection using it's id.
+
+        In order to query a different database, please specify the `alias` of the database to query.
+        '''
+
+        from motorengine import Q
+
+        if id is None and not kwargs:
+            raise RuntimeError("Either an id or a filter must be provided to get")
+
+        if id is not None:
+            if not isinstance(id, ObjectId):
+                id = ObjectId(id)
+
+            filters = {
+                "_id": id
+            }
+        else:
+            filters = Q(**kwargs)
+            filters = self.get_query_from_filters(filters)
+
+        document = await self.coll(alias).find_one(
+            filters, projection=self._loaded_fields.to_query(self.__klass__),
+        )
+
+        return document
 
     def get_query_from_filters(self, filters):
         if not filters:
@@ -723,10 +767,10 @@ class QuerySet(object):
         from motorengine.fields.base_field import BaseField
         from motorengine.fields.list_field import ListField
 
-        if isinstance(field_name, (ListField, )):
+        if isinstance(field_name, ListField):
             raise ValueError("Can't order by a list field. If you meant to order by the size of the list, please use either an Aggregation Pipeline query (look for Document.objects.aggregate) or create an IntField with the size of the list field in your Document.")
 
-        if isinstance(field_name, (BaseField, )):
+        if isinstance(field_name, BaseField):
             field_name = field_name.name
 
         if field_name not in self.__klass__._fields:
@@ -780,7 +824,7 @@ class QuerySet(object):
 
         return handle
 
-    @return_future
+    @run_on_executor
     def find_all(self, callback, lazy=None, alias=None):
         '''
         Returns a list of items in the current queryset collection that match specified filters (if any).
@@ -815,7 +859,7 @@ class QuerySet(object):
 
         return handle
 
-    @return_future
+    @run_on_executor
     def count(self, callback, alias=None):
         '''
         Returns the number of documents in the collection that match the specified filters, if any.
@@ -827,40 +871,33 @@ class QuerySet(object):
     def aggregate(self):
         return Aggregation(self)
 
-    def handle_ensure_index(self, callback, created_indexes, total_indexes):
-        def handle(*arguments, **kw):
-            if len(arguments) > 1 and arguments[1]:
-                raise arguments[1]
+    async def ensure_indexes(self, alias=None):
+        print(f"ensure_indexes")
+        
+        if bool(QuerySet.created_indexes):
+            return
 
-            created_indexes.append(arguments[0])
-
-            if len(created_indexes) < total_indexes:
-                return
-
-            callback(total_indexes)
-
-        return handle
-
-    @return_future
-    def ensure_index(self, callback, alias=None):
+        print("start create index")
         fields_with_index = []
-        for field_name, field in self.__klass__._fields.items():
+        for field_name, field in list(self.__klass__._fields.items()):
             if field.unique or field.sparse:
                 fields_with_index.append(field)
-
-        created_indexes = []
+        
 
         for field in fields_with_index:
-            self.coll(alias).ensure_index(
+            print(f"field.db_field: {field.db_field}")
+            #
+            index = await self.coll(alias).create_index(
                 field.db_field,
                 unique=field.unique,
                 sparse=field.sparse,
-                callback=self.handle_ensure_index(
-                    callback,
-                    created_indexes,
-                    len(fields_with_index)
-                ),
             )
+            print(f"index: {index} has been creatd")
 
-        if not fields_with_index:
-            callback(0)
+        QuerySet.created_indexes = await self.coll(alias).index_information()
+
+        #TODO: compound index
+
+    async def create_index(self, alias=None):
+        print(f"create_index")
+        pass
