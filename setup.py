@@ -53,7 +53,13 @@ MotorEngine is a port of the amazing MongoEngine Mapper. Instead of using pymong
         'six',
         'easydict'
     ],
-    use_2to3=True,
+
+    #! Notice:
+    # uncomment this
+    # If you have enabled the use_2to3 flag, then of course the .egg-link will not link directly to your source code when run under Python 3, since that source code would be made for Python 2 and not work under Python 3. Instead the setup.py develop will build Python 3 code under the build directory, and link there. This means that after doing code changes you will have to run setup.py build before these changes are picked up by your Python 3 installation.
+    # [detail](https://setuptools.readthedocs.io/en/latest/setuptools.html#development-mode)
+    
+    #use_2to3=True,
     extras_require={
         'tests': tests_require,
     },

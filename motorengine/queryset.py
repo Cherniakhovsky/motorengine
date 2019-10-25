@@ -4,6 +4,7 @@
 import sys
 import operator
 import itertools
+from typing import Union
 
 from pymongo.errors import DuplicateKeyError
 from tornado.concurrent import run_on_executor
@@ -119,6 +120,7 @@ class QuerySet(object):
                 msg.format(document.__class__.__name__)
             )
 
+
         if self.validate_document(document):
 
             await self.ensure_indexes(alias=alias)
@@ -127,7 +129,8 @@ class QuerySet(object):
             doc = document.to_son()
 
             if document._id is not None:
-                result = await self.coll(alias).update_one(
+                print(f"xxxxxxxxx: {document._id}, {doc}")
+                result = await self.coll(alias).replace_one(
                     {'_id': document._id}, 
                     doc, 
                     upsert=upsert,
@@ -135,6 +138,7 @@ class QuerySet(object):
                 return document._id if result.modified_count > 0 else None
             else:
                 result = await self.coll(alias).insert_one(doc)
+                document._id = result.inserted_id
                 return result.inserted_id
 
 
@@ -229,6 +233,7 @@ class QuerySet(object):
 
         return result
 
+    # old
     @run_on_executor
     def update(self, definition, callback=None, alias=None):
         if callback is None:
@@ -247,6 +252,19 @@ class QuerySet(object):
             callback=self.handle_update_documents(callback)
         )
         self.coll(alias).update(**update_arguments)
+
+    async def update(self, definition, alias = None):
+        definition = self.transform_definition(definition)
+        update_filters = {}
+        if self._filters:
+            update_filters = self.get_query_from_filters(self._filters)
+
+        update_arguments = dict(
+            filter=update_filters,
+            update={'$set': definition},
+        )
+        await self.coll(alias).update_many(**update_arguments)
+
 
     # old
     @run_on_executor
@@ -647,7 +665,7 @@ class QuerySet(object):
             callback=self.handle_get(callback)
         )
 
-    async def get(self, id=None, alias=None, **kwargs) -> dict:
+    async def get(self, id=None, alias=None, raw: bool = False, **kwargs) -> Union[dict, 'Document']:
         '''
         Gets a single item of the current queryset collection using it's id.
 
@@ -674,26 +692,29 @@ class QuerySet(object):
             filters, projection=self._loaded_fields.to_query(self.__klass__),
         )
 
-        # return Document object for furthur operation such as remove, update
-        # if document_dict is None:
-        #     return None
+        if raw:
+            return document_dict
 
-        # else:
-        #     doc = self.__klass__.from_son(
-        #         instance,
-        #         # if _loaded_fields is not empty then
-        #         # document is partly loaded
-        #         _is_partly_loaded=bool(self._loaded_fields),
-        #         # set projections for references (if any)
-        #         _reference_loaded_fields=self._reference_loaded_fields
-        #     )
+        else:
+            # return Document object for furthur operation such as remove, update
+            if bool(document_dict) is False:
+                return None
+            
+            else:
+                document = self.__klass__.from_son(
+                    document_dict,
+                    # if _loaded_fields is not empty then
+                    # document is partly loaded
+                    _is_partly_loaded=bool(self._loaded_fields),
+                    # set projections for references (if any)
+                    _reference_loaded_fields=self._reference_loaded_fields
+                )
 
-        #     if self.is_lazy:
-        #         callback(doc)
-        #     else:
-        #         doc.load_references(callback=self.handle_auto_load_references(doc, callback))
-
-        return document_dict
+                if self.is_lazy:
+                    return document
+                else:
+                    await document.load_references()
+                    return document
 
     def get_query_from_filters(self, filters):
         if not filters:
@@ -919,9 +940,10 @@ class QuerySet(object):
         return Aggregation(self)
 
     async def ensure_indexes(self, alias=None):
-        print(f"ensure_indexes")
+        print(f"ensure_indexes...")
         
         if bool(QuerySet.created_indexes):
+            print(f"skip")
             return
 
         print("start create index")

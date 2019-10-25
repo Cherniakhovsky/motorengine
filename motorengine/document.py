@@ -41,10 +41,13 @@ class BaseDocument(object):
                 self._values[field.name] = field.default
 
         for key, value in list(kw.items()):
-            if key not in self._fields:
+            if key in self._fields:
+                self._values[key] = value
+            elif self.__allow_dynamic_fields__:
                 self._fields[key] = DynamicField(db_field="_%s" % key.lstrip('_'))
-            self._values[key] = value
-
+                self._values[key] = value
+            else:
+                pass
     # old
     @classmethod
     @run_on_executor
@@ -264,29 +267,36 @@ class BaseDocument(object):
 
     # TODO:
     # new
-    # async def load_references(self, fields=None, alias=None):
-    #     references = self.find_references(document=self, fields=fields)
-    #     reference_count = len(references)
+    async def load_references(self, fields=None, alias=None):
+        references = self.find_references(document=self, fields=fields)
+        reference_count = len(references)
 
-    #     if not reference_count:
-    #         callback({
-    #             'loaded_reference_count': reference_count,
-    #             'loaded_values': []
-    #         })
-    #         return
+        if not reference_count:
+            print({
+                'loaded_reference_count': reference_count,
+                'loaded_values': []
+            })
+            return
 
-    #     for dereference_function, document_id, values_collection, field_name, fill_values_method in references:
-    #         dereference_function(
-    #             document_id,
-    #             callback=self.handle_load_reference(
-    #                 callback=callback,
-    #                 references=references,
-    #                 reference_count=reference_count,
-    #                 values_collection=values_collection,
-    #                 field_name=field_name,
-    #                 fill_values_method=fill_values_method
-    #             )
-    #         )
+        for dereference_function, document_id, values_collection, field_name, fill_values_method in references:
+            
+            document = await dereference_function(document_id)
+
+            if fill_values_method is None:
+                fill_values_method = self.fill_values_collection
+
+            fill_values_method(values_collection, field_name, document)
+
+            if reference_count > 0:
+                references.pop()
+
+            if len(references) == 0:
+                print({
+                    'loaded_reference_count': reference_count,
+                    'loaded_values': values_collection
+                })
+        return
+
 
     def find_references(self, document, fields=None, results=None):
         if results is None:
