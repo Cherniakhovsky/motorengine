@@ -4,7 +4,7 @@
 import sys
 import operator
 import itertools
-from typing import Union
+from typing import Union, List, Dict
 
 from pymongo.errors import DuplicateKeyError
 from tornado.concurrent import run_on_executor
@@ -665,7 +665,7 @@ class QuerySet(object):
             callback=self.handle_get(callback)
         )
 
-    async def get(self, id=None, alias=None, raw: bool = False, **kwargs) -> Union[dict, 'Document']:
+    async def get(self, id=None, alias=None, lazy=False, raw: bool=False, **kwargs) -> Union[Dict, 'Document']:
         '''
         Gets a single item of the current queryset collection using it's id.
 
@@ -710,11 +710,10 @@ class QuerySet(object):
                     _reference_loaded_fields=self._reference_loaded_fields
                 )
 
-                if self.is_lazy:
-                    return document
-                else:
+                if (not lazy) or (not document.is_lazy):
                     await document.load_references()
-                    return document
+
+                return document
 
     def get_query_from_filters(self, filters):
         if not filters:
@@ -892,6 +891,7 @@ class QuerySet(object):
 
         return handle
 
+    # old
     @run_on_executor
     def find_all(self, callback, lazy=None, alias=None):
         '''
@@ -908,7 +908,7 @@ class QuerySet(object):
                 # result is None if no users found
                 pass
         '''
-        to_list_arguments = dict(callback=self.handle_find_all(callback, lazy=lazy))
+        to_list_arguments = dictionary(callback=self.handle_find_all(callback, lazy=lazy))
 
         if self._limit is not None:
             to_list_arguments['length'] = self._limit
@@ -918,6 +918,73 @@ class QuerySet(object):
         cursor = self._get_find_cursor(alias=alias)
 
         cursor.to_list(**to_list_arguments)
+
+    # new
+    async def find_all(self, lazy=None, alias=None, raw=False) -> Union[List[Dict], List['document'], None]:
+        '''
+        Returns a list of items in the current queryset collection that match specified filters (if any).
+
+        In order to query a different database, please specify the `alias` of the database to query.
+        
+        doc, docs represent the raw data returned from mongodb by motor driver, they are always python pure List or Dict.
+        document, documents represent the Document object or List[Document] object.
+        Usage::
+
+            users = await User.objects.find_all()
+
+            users is List[Dict] type if raw is True,
+            users is List[Document] type if raw is False
+
+        '''
+        to_list_arguments = dict()
+
+        if self._limit is not None:
+            to_list_arguments['length'] = self._limit
+        else:
+            to_list_arguments['length'] = DEFAULT_LIMIT
+
+        cursor = self._get_find_cursor(alias=alias)
+
+        docs =  await cursor.to_list(**to_list_arguments)
+        print(f"find doc list {docs}")
+
+        if raw:
+            return docs
+
+        result = []
+        self.current_count = 0
+        self.result_size = len(docs)
+
+        # if _loaded_fields is not empty then documents are partly loaded
+        is_partly_loaded = bool(self._loaded_fields)
+
+        for doc in docs:
+            document = self.__klass__.from_son(
+                doc,
+                # set projections for references (if any)
+                _reference_loaded_fields=self._reference_loaded_fields,
+                _is_partly_loaded=is_partly_loaded
+            )
+
+            result.append(document)
+
+        if not result:
+            return None
+
+        for document in result:
+            if (lazy is not None and not lazy) or not document.is_lazy:
+                await document.load_references(document._fields)
+                print(f"eager load document: {document}")
+                print(f"eager load document._values: {document._values}")
+
+            self.current_count += 1
+
+            if self.current_count == self.result_size:
+                self.current_count = None
+                self.result_size = None
+            
+
+        return result
 
     def handle_count(self, callback):
         def handle(*arguments, **kwargs):

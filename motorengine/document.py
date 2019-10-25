@@ -98,6 +98,7 @@ class BaseDocument(object):
 
         for name, field in list(self._fields.items()):
             value = self.get_field_value(name)
+
             if field.sparse and value is None:
                 continue
             data[field.db_field] = field.to_son(value)
@@ -295,6 +296,7 @@ class BaseDocument(object):
                     'loaded_reference_count': reference_count,
                     'loaded_values': values_collection
                 })
+
         return
 
 
