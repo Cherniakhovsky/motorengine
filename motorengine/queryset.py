@@ -994,6 +994,7 @@ class QuerySet(object):
 
         return handle
 
+    # old
     @run_on_executor
     def count(self, callback, alias=None):
         '''
@@ -1001,6 +1002,15 @@ class QuerySet(object):
         '''
         cursor = self._get_find_cursor(alias=alias)
         cursor.count(callback=self.handle_count(callback))
+
+    # new
+    async def count(self, alias=None) -> int:
+        '''
+        Returns the number of documents in the collection that match the specified filters, if any.
+        '''
+        query_filters = self.get_query_from_filters(self._filters)
+        count = await self.coll(alias).count_documents(query_filters)
+        return count
 
     @property
     def aggregate(self):
