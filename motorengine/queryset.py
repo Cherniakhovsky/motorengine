@@ -1029,7 +1029,9 @@ class QuerySet(object):
             if field.unique or field.sparse:
                 fields_with_index.append(field)
         
-
+        #TODO:
+        # https://docs.mongodb.com/manual/core/index-unique/#unique-compound-index
+        
         for field in fields_with_index:
             print(f"field.db_field: {field.db_field}")
             #

@@ -11,7 +11,7 @@ except ImportError:
     pass
 
 try:
-    from motor import MotorClient
+    from motor.motor_asyncio import AsyncIOMotorClient
 except ImportError:
     pass
 
@@ -59,7 +59,7 @@ def disconnect(alias=DEFAULT_CONNECTION_NAME):
         del _default_dbs[alias]
 
 
-def get_connection(alias=DEFAULT_CONNECTION_NAME, db=None):
+def get_connection(alias=DEFAULT_CONNECTION_NAME, db=None) -> Database:
     global _connections
     global _default_dbs
 
@@ -67,7 +67,7 @@ def get_connection(alias=DEFAULT_CONNECTION_NAME, db=None):
         conn_settings = _connection_settings[alias].copy()
         db = conn_settings.pop('name', None)
 
-        connection_class = MotorClient
+        connection_class = AsyncIOMotorClient
         if 'replicaSet' in conn_settings:
             # Discard port since it can't be used on MongoReplicaSetClient
             conn_settings.pop('port', None)

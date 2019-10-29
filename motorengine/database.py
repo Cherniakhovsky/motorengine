@@ -12,7 +12,7 @@ class Database(object):
 
     def disconnect(self):
         return self.connection.close()
-
+    
     def __getattribute__(self, name):
         if name in ['ping', 'connection', 'database', 'disconnect']:
             return object.__getattribute__(self, name)
