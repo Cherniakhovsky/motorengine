@@ -11,6 +11,7 @@ AUTHORIZED_FIELDS = [
     '_id', '_values', '_reference_loaded_fields', 'is_partly_loaded'
 ]
 
+DISABLED_FIELDS = ['id']
 
 class BaseDocument(object):
     def __init__(
@@ -23,9 +24,14 @@ class BaseDocument(object):
         reference fields if any. Default: None.
         :param kw: pairs of fields of the document and their values
         """
+        for key in DISABLED_FIELDS:
+            kw.pop(key, None)
+            self._fields.pop(key, None)
+
         from motorengine.fields.dynamic_field import DynamicField
 
-        self._id = kw.pop('_id', None)
+        _id = kw.pop('_id', None)
+        self.set_id(_id)
         self._values = {}
         self.is_partly_loaded = _is_partly_loaded
 
@@ -48,6 +54,8 @@ class BaseDocument(object):
                 self._values[key] = value
             else:
                 pass
+
+        
     # old
     @classmethod
     @run_on_executor
@@ -387,6 +395,19 @@ class BaseDocument(object):
 
         return value
 
+    def set_id(self, value):
+        if value is None:
+            self._id = None
+            self.id = None
+
+        elif isinstance(value, ObjectId):
+            self._id = value
+            self.id = str(self._id)
+        
+        else:
+            self.id = str(value)
+            self._id = ObjectId(self.id)
+
     def __getattribute__(self, name):
         # required for the next test
         if name in ['_fields']:
@@ -412,7 +433,7 @@ class BaseDocument(object):
     def __setattr__(self, name, value):
         from motorengine.fields.dynamic_field import DynamicField
 
-        if name not in AUTHORIZED_FIELDS and name not in self._fields:
+        if name not in AUTHORIZED_FIELDS and name not in self._fields and name not in DISABLED_FIELDS:
             self._fields[name] = DynamicField(db_field="_%s" % name)
 
         if name in self._fields:

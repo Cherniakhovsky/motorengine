@@ -138,7 +138,7 @@ class QuerySet(object):
                 return document._id if result.modified_count > 0 else None
             else:
                 result = await self.coll(alias).insert_one(doc)
-                document._id = result.inserted_id
+                document.set_id(result.inserted_id)
                 return result.inserted_id
 
 
@@ -642,6 +642,12 @@ class QuerySet(object):
         Gets a single item of the current queryset collection using it's id.
 
         In order to query a different database, please specify the `alias` of the database to query.
+        Usage:
+            user = Users.objects.get(ObjectId("x89831231313")) #get user by its id
+            user = Users.objects.get("x89831231313") #get user by its id
+
+            user = Users.objects.filter(firstname="frank").get() #get one user by filter
+
         '''
 
         from motorengine import Q
@@ -665,11 +671,17 @@ class QuerySet(object):
             callback=self.handle_get(callback)
         )
 
-    async def get(self, id=None, alias=None, lazy=False, raw: bool=False, **kwargs) -> Union[Dict, 'Document']:
+    async def get(self, id=None, alias=None, lazy=False, raw: bool=False, **kwargs) -> Union[Dict, 'Document', None]:
         '''
         Gets a single item of the current queryset collection using it's id.
 
         In order to query a different database, please specify the `alias` of the database to query.
+        Usage:
+            user = Users.objects.get(ObjectId("x89831231313")) #get user by its id
+            user = Users.objects.get("x89831231313") #get user by its id
+
+            user = Users.objects.get(firstname="frank") #get one user by filter
+            user = Users.objects.get(age__gt=30) #get one user by filter
         '''
 
         from motorengine import Q
@@ -770,7 +782,7 @@ class QuerySet(object):
                     self._filters = Q(arguments[0])
                 else:
                     self._filters = Q(**kwargs)
-
+        
         return self
 
     def filter_not(self, *arguments, **kwargs):
@@ -946,7 +958,7 @@ class QuerySet(object):
         cursor = self._get_find_cursor(alias=alias)
 
         docs =  await cursor.to_list(**to_list_arguments)
-        print(f"find doc list {docs}")
+        #print(f"find doc list {docs}")
 
         if raw:
             return docs
@@ -985,6 +997,7 @@ class QuerySet(object):
             
 
         return result
+
 
     def handle_count(self, callback):
         def handle(*arguments, **kwargs):
