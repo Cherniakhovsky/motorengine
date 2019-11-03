@@ -109,6 +109,7 @@ class BaseDocument(object):
 
             if field.sparse and value is None:
                 continue
+
             data[field.db_field] = field.to_son(value)
 
         return data
