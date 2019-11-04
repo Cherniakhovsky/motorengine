@@ -72,8 +72,8 @@ class DocumentMetaClass(type):
         if '__alias__' not in attrs:
             new_class.__alias__ = None
 
-        if '__allow_dynamic_fields__' not in attrs:
-            new_class.__allow_dynamic_fields__ = False
+        if '__allow_undefined_fields__' not in attrs:
+            new_class.__allow_undefined_fields__ = False
 
         setattr(new_class, 'objects', classproperty(lambda *args, **kw: QuerySet(new_class)))
 

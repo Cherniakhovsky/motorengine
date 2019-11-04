@@ -7,6 +7,7 @@ import itertools
 from typing import Union, List, Dict
 
 from pymongo.errors import DuplicateKeyError
+from pymongo.results import UpdateResult
 from tornado.concurrent import run_on_executor
 from easydict import EasyDict as edict
 from bson.objectid import ObjectId
@@ -110,6 +111,22 @@ class QuerySet(object):
                 setattr(document, field_name, field.on_save(document, creating))
 
     async def save(self, document, alias=None, upsert=False) -> ObjectId:
+        """Summary
+        If the document is a new created one, it should have no id and will be inserted into db.
+        If the documetn is the retrieved one, it should have an id and will be replaced into db.
+        The replace method should be effective if most fields of the document are updated. Otherwise,
+        when only few fields are updated, it will cost more I/O. 
+        Args:
+            document (TYPE): Description
+            alias (None, optional): Description
+            upsert (bool, optional): Description
+        
+        Returns:
+            ObjectId: Description
+        
+        Raises:
+            PartlyLoadedDocumentError: Description
+        """
         if document.is_partly_loaded:
             msg = (
                 "Partly loaded document {0} can't be saved. Document should "
@@ -140,6 +157,37 @@ class QuerySet(object):
                 result = await self.coll(alias).insert_one(doc)
                 document.set_id(result.inserted_id)
                 return result.inserted_id
+
+
+    async def update_self(self, document, alias=None, upsert=False) -> UpdateResult:
+        if document.is_partly_loaded:
+            msg = (
+                "Partly loaded document {0} can't be saved. Document should "
+                "be loaded without 'only', 'exclude' or 'fields' "
+                "QuerySet's modifiers"
+            )
+            raise PartlyLoadedDocumentError(
+                msg.format(document.__class__.__name__)
+            )
+
+
+        if self.validate_document(document):
+
+            await self.ensure_indexes(alias=alias)
+
+            self.update_field_on_save_values(document, document._id is not None)
+            doc = document.to_son_changed_values()
+
+            if document._id is not None:
+                print(f"update_self: {document._id}, {doc}")
+                result = await self.coll(alias).update_one(
+                    {'_id': document._id}, 
+                    {'$set': doc}, 
+                    upsert=upsert,
+                )
+                return result
+            else:
+                raise Exception("document can not be updated because it has no id!")
 
 
     def indexes_saved_before_save(self, document, callback, alias=None, upsert=False):

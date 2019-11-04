@@ -6,6 +6,7 @@ from tornado.concurrent import run_on_executor
 from motorengine.metaclasses import DocumentMetaClass
 from motorengine.errors import InvalidDocumentError, LoadReferencesRequiredError
 from bson.objectid import ObjectId
+from motorengine.fields import DateTimeField
 
 AUTHORIZED_FIELDS = [
     '_id', '_values', '_reference_loaded_fields', 'is_partly_loaded'
@@ -33,6 +34,8 @@ class BaseDocument(object):
         _id = kw.pop('_id', None)
         self.set_id(_id)
         self._values = {}
+        self._changed_values = set()
+
         self.is_partly_loaded = _is_partly_loaded
 
         if _reference_loaded_fields:
@@ -41,6 +44,9 @@ class BaseDocument(object):
             self._reference_loaded_fields = {}
 
         for key, field in list(self._fields.items()):
+            if isinstance(field, DateTimeField) and field.auto_now_on_update:
+                self._changed_values.add(key)
+
             if callable(field.default):
                 self._values[field.name] = field.default()
             else:
@@ -49,13 +55,12 @@ class BaseDocument(object):
         for key, value in list(kw.items()):
             if key in self._fields:
                 self._values[key] = value
-            elif self.__allow_dynamic_fields__:
+            elif self.__allow_undefined_fields__:
                 self._fields[key] = DynamicField(db_field="_%s" % key.lstrip('_'))
                 self._values[key] = value
             else:
                 pass
 
-        
     # old
     @classmethod
     @run_on_executor
@@ -101,7 +106,15 @@ class BaseDocument(object):
             **field_values
         )
 
-    def to_son(self):
+    def to_son(self) -> dict:
+        """Summary
+        convert the document object into a dict type data, which can be used the motor driver
+        to easily interact with db. Normaly, only the defined field will be converted, unless
+        you set `__allow_undefined_fields__` to True.
+        
+        Returns:
+            dict: Description
+        """
         data = dict()
 
         for name, field in list(self._fields.items()):
@@ -113,6 +126,30 @@ class BaseDocument(object):
             data[field.db_field] = field.to_son(value)
 
         return data
+
+    def to_son_changed_values(self):
+        """Summary
+        only convert updated field in the document into a dict data for being used in partly update
+        document instead of replace document into db.
+        
+        Returns:
+            TYPE: Description
+        """
+        data = dict()
+
+        for name in self._changed_values:
+            value = self.get_field_value(name)
+
+            if name in self._fields:
+                field = self._fields[name]
+
+                if field.sparse and value is None:
+                    continue
+
+                data[field.db_field] = field.to_son(value)
+
+        return data
+
 
     def validate(self):
         return self.validate_fields()
@@ -143,6 +180,53 @@ class BaseDocument(object):
         '''
         _id = await self.objects.save(self, alias=alias, upsert=upsert)
         return _id
+
+
+
+    async def update(self, alias=None, upsert=False):
+        '''
+        Updates the changed fileds in the current instance of this document.
+        The difference between save and update,
+        `save` actully use replace_one method in motor to do whole document update, so
+        you must care the document you want to `save` to make sure the fields not missing
+        in your expectation,
+        `update` actully use update_one method in motor to do part document update, so
+        it will do update on fields which you want to change and do not affect other fields.
+        Now to decide on which fields to be updated, it should use left-right assignment method,
+        
+        Usage:
+            class PhotoModel(Document):
+                name = StringField(required=True)
+
+
+            class AlbumModel(Document):
+                __collection__ = (
+                    "albums"
+                )  # optional. if no collection is specified, class name is used.
+                title = StringField(required=False) 
+                photos = ListField(EmbeddedDocumentField(PhotoModel))
+                created_at = DateTimeField(auto_now_on_insert=True, tz=datetime.timezone.utc)
+                updated_at = DateTimeField(
+                    auto_now_on_insert=True, auto_now_on_update=True, tz=datetime.timezone.utc
+                )
+            
+            photos = [PhotoModel(name="1"), PhotoModel(name="2")]
+            album = AlbumModel(title="aaaaa", photos=photos)
+            album.save()
+        
+            
+            album.title = "bbbbbb"
+            photos[0].name = "3"
+            photos[1].name = "4"
+            album.photos = photos #!!! must do the assignment even album.photos already refer to photos
+            album.update()
+
+        Args:
+            alias (None, optional): Description
+            upsert (bool, optional): Description
+        '''
+        await self.objects.update_self(self, alias=alias, upsert=upsert)
+
 
     # old
     @run_on_executor
@@ -397,6 +481,18 @@ class BaseDocument(object):
         return value
 
     def set_id(self, value):
+        """Summary
+        Automatically check value type, it can be ObjectId or a string. As desined, this function
+        should be called when the document is instantiated or when a new document is saved into db
+        to keep consistent `_id` with db. (the db will return `_id` which is decided by mongoDB)
+
+        `_id` will represents the ObjectId, while `id` will represent the string format of the `_id`.
+        They should be in pair and consistence. The virtual `id` field help us use easily than `_id`,
+        when using `Pydantic` model. It will never be saved into db or set into document self._fields.
+
+        Args:
+            value (TYPE): Description
+        """
         if value is None:
             self._id = None
             self.id = None
@@ -434,11 +530,12 @@ class BaseDocument(object):
     def __setattr__(self, name, value):
         from motorengine.fields.dynamic_field import DynamicField
 
-        if name not in AUTHORIZED_FIELDS and name not in self._fields and name not in DISABLED_FIELDS:
+        if name not in AUTHORIZED_FIELDS and name not in self._fields and name not in DISABLED_FIELDS and self.__allow_undefined_fields__:
             self._fields[name] = DynamicField(db_field="_%s" % name)
 
         if name in self._fields:
             self._values[name] = value
+            self._changed_values.add(name)
             return
 
         object.__setattr__(self, name, value)
