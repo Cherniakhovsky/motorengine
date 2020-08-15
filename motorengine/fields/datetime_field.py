@@ -64,6 +64,11 @@ class DateTimeField(BaseField):
         return self.ensure_timezone(value)
 
     def validate(self, value):
+        try:
+            if isinstance(value, six.string_types):
+                value = datetime.strptime(value, FORMAT)
+        except:
+            return False
         return value is None or isinstance(value, datetime)
 
     def ensure_timezone(self, value):
