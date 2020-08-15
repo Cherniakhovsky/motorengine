@@ -8,6 +8,7 @@ from datetime import datetime
 from motorengine.fields.base_field import BaseField
 
 FORMAT = "%Y-%m-%d %H:%M:%S"
+FORMAT2 = "%Y-%m-%d %H:%M:%S"
 
 
 class DateTimeField(BaseField):
@@ -64,11 +65,14 @@ class DateTimeField(BaseField):
         return self.ensure_timezone(value)
 
     def validate(self, value):
-        try:
-            if isinstance(value, six.string_types):
+        if isinstance(value, six.string_types):
+            try:
                 value = datetime.strptime(value, FORMAT)
-        except:
-            return False
+            except:
+                try:
+                    value = datetime.strptime(value, FORMAT2)
+                except:
+                    return False
         return value is None or isinstance(value, datetime)
 
     def ensure_timezone(self, value):
